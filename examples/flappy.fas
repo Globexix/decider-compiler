@@ -2,6 +2,13 @@
 // @state x: 4..4 = 4
 // @state y: 0..15 = 8
 // @state rise: 0..3 = 0
+// @state rng: 0..6 = 0
+// @state phase: 0..6 = 2
+
+// @array pipes: Pipe[4]
+// @field pipes.offset: 0..21 = 0,7,14,21
+// @field pipes.gap_y: 2..8 = 4,4,4,2
+// @field pipes.enabled: 0..1 = 0,0,0,1
 
 // @input flap = signal-F
 // @state held: 0..1 = 0
@@ -9,9 +16,39 @@
 // @screen 24x16
 // @point x,y icon=logistic-robot
 
+// @rect upper x=(phase+pipes.offset) y=0 width=2 height=pipes.gap_y enabled=pipes.enabled icon=signal-green
+// @rect lower x=(phase+pipes.offset) y=(pipes.gap_y+5) width=2 height=(16-pipes.gap_y-5) enabled=pipes.enabled icon=signal-green
+
+struct Pipe { offset i32, gap_y i32, enabled bool }
+
 fn update_tick(tick i32) i32 {
 	if tick == 7 { return 0 }
 	return tick + 1
+}
+
+fn update_phase(phase i32, tick i32) i32 {
+    if tick != 7 { return phase }
+    if phase == 0 { return 6 }
+    return phase - 1
+}
+
+fn update_rng(rng i32, pipes addr, tick i32, phase i32) i32 {
+    if tick != 7 || phase != 0 { return rng }
+    if rng >= 4 { return rng - 4 }
+    return rng + 3
+}
+
+fn update_pipes(pipes addr, tick i32, rng i32, phase i32) void {
+    if tick != 7 || phase != 0 { return }
+    view items = pipes[arr[4, Pipe]]
+    
+    for const i usize in 0..3 {
+        items[i].gap_y = items[i+1].gap_y
+        items[i].enabled = items[i+1].enabled
+    }
+
+    items[3].gap_y = rng + 2
+    items[3].enabled = true
 }
 
 fn update_x(x i32) i32 {
