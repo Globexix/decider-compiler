@@ -1,0 +1,148 @@
+// @state tick: 0..7 = 1
+// @state x: 2..21 = 12
+// @state y: 0..15 = 8
+// @state left: 0..13 = 6
+// @state right: 0..13 = 6
+// @state vx: 0..1 = 1
+// @state vy: 0..1 = 1
+// @state serve: 0..3 = 0
+// @state score_left: 0..9 = 0
+// @state score_right: 0..9 = 0
+// @state miss: 0..1 = 0
+
+// @input left_up = signal-U
+// @input left_down = signal-D
+// @input right_up = signal-W
+// @input right_down = signal-Q
+
+// @screen 24x16
+// @bar left x=1 size=3 icon=signal-yellow
+// @bar right x=22 size=3 icon=signal-blue
+
+// @digits score_left at=8,1
+// @digits score_right at=13,1
+
+// @point x,y icon=signal-radioactivity
+
+fn update_tick(tick i32) i32 {
+    if tick == 7 { return 0 }
+    return tick + 1
+}
+
+fn move_paddle(paddle i32, up bool, down bool) i32 {
+    if up == down { return paddle }
+
+    if up {
+        if paddle > 0 { return paddle - 1 }
+        return paddle
+    }
+
+    if paddle < 13 { return paddle + 1 }
+    return paddle
+}
+
+fn update_left(left i32, left_up bool, left_down bool, tick i32) i32 {
+    if tick != 7 { return left }
+    return move_paddle(left, left_up, left_down)
+}
+
+fn update_right(right i32, right_up bool, right_down bool, tick i32) i32 {
+    if tick != 7 { return right }
+    return move_paddle(right, right_up, right_down)
+}
+
+fn bounce_y(y i32, down bool) i32 {
+    if y == 0 { return 1 }
+    if y == 15 { return 14 }
+
+    if down { return y + 1 }
+    return y - 1
+}
+
+fn update_x(x i32, vx bool, tick i32, miss bool) i32 {
+    if tick != 0 { return x }
+    if miss { return 12 }
+
+    if x == 2 && !vx { return 3 }
+    if x == 21 && vx { return 20 }
+
+    if vx { return x + 1 }
+    return x - 1
+}
+
+fn update_y(y i32, vy bool, tick i32, miss bool) i32 {
+    if tick != 0 { return y }
+    if miss { return 8 }
+
+    return bounce_y(y, vy)
+}
+
+fn update_vx(x i32, vx bool, tick i32, miss bool, serve i32) bool {
+    if tick != 0 { return vx }
+    if miss { return serve < 2 }
+
+    if x == 2 && !vx { return true }
+    if x == 21 && vx { return false }
+
+    return vx
+}
+
+fn update_vy(y i32, vy bool, tick i32, miss bool, serve i32) bool {
+    if tick != 0 { return vy }
+    if miss { return (serve & 1) == 0 }
+
+    if y == 0 { return true }
+    if y == 15 { return false }
+
+    return vy
+}
+
+fn update_serve(tick i32, miss bool, serve i32) i32 {
+    if tick != 0 || !miss { return serve }
+
+    if serve == 3 { return 0 }
+    return serve + 1
+}
+
+fn update_score_left(score_left i32, score_right i32, x i32, tick i32, miss bool) i32 {
+    if tick != 0 || !miss { return score_left }
+
+    if x == 21 {
+        if score_left == 9 { return 0 }
+        return score_left + 1
+    }
+
+    if x == 2 && score_right == 9 { return 0 }
+    return score_left
+}
+
+fn update_score_right(score_right i32, score_left i32, x i32, tick i32, miss bool) i32 {
+    if tick != 0 || !miss { return score_right }
+
+    if x == 2 {
+        if score_right == 9 { return 0 }
+        return score_right + 1
+    }
+
+    if x == 21 && score_left == 9 { return 0 }
+    return score_right
+}
+
+fn paddle_covers(paddle i32, y i32) bool {
+    return y >= paddle && y < paddle + 3
+}
+
+fn paddle_catches(paddle i32, y i32, up bool, down bool) bool {
+    return paddle_covers(paddle, y) || paddle_covers(move_paddle(paddle, up, down), y)
+}
+
+fn update_miss(miss bool, x i32, y i32, vx bool, vy bool, left i32, right i32, left_up bool, left_down bool, right_up bool, right_down bool, tick i32) bool {
+    if tick != 7 { return miss }
+
+    next_y i32 = bounce_y(y, vy)
+
+    if x == 2 && !vx { return !paddle_catches(left, next_y, left_up, left_down) }
+    if x == 21 && vx { return !paddle_catches(right, next_y, right_up, right_down) }
+
+    return false
+}
