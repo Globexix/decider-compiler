@@ -1,0 +1,28 @@
+// @state tick: 0..7 = 0
+// @state x: 4..4 = 4
+// @state y: 0..15 = 8
+// @input flap = signal-F
+// @screen 24x16
+// @point x,y icon=logistic-robot
+
+fn update_tick(tick i32) i32 {
+	if tick == 7 { return 0 }
+	return tick + 1
+}
+
+fn update_x(x i32) i32 {
+	return x
+}
+
+fn update_y(y i32, tick i32, flap bool) i32 {
+	if tick != 7 { return y }
+
+	if flap {
+		if y > 0 { return y - 1 }
+		return y
+	}
+
+	if y < 15 { return y + 1 }
+
+	return y
+}
