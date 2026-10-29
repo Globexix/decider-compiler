@@ -6,7 +6,7 @@
 
 (rule
  (targets catalog_data.ml)
- (deps data/capabilities.json data/symbol_catalog.json)
+ (deps data/capabilities.json data/symbol_catalog.json data/base_signals.json)
  (action
   (with-stdout-to catalog_data.ml
-   (run %{exe:../gen/gen_catalog.exe} data/capabilities.json data/symbol_catalog.json))))
+   (run %{exe:../gen/gen_catalog.exe} data/capabilities.json data/symbol_catalog.json data/base_signals.json))))

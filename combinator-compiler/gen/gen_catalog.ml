@@ -14,6 +14,10 @@ let identity kind name quality =
 let () =
   let capabilities = Yojson.Safe.from_file Sys.argv.(1) in
   let symbols = Yojson.Safe.from_file Sys.argv.(2) in
+  let base_game =
+    Yojson.Safe.from_file Sys.argv.(3) |> member "signals" |> to_list
+    |> List.map (fun s -> (s |> member "type" |> to_string, s |> member "name" |> to_string)) in
+  let in_base kind name quality = quality = "normal" && List.mem (kind, name) base_game in
   let qualities = symbols |> member "qualities" |> to_list |> List.map (fun q -> q |> member "name" |> to_string) in
   let quality_rank q =
     let rec find i = function [] -> failwith q | x :: rest -> if x = q then i else find (i + 1) rest in
@@ -24,10 +28,12 @@ let () =
     |> List.map (fun s -> (s |> member "type" |> to_string, s |> member "name" |> to_string,
                            s |> member "quality" |> to_string))
     |> List.filter (fun (_, name, _) -> not (List.mem name special))
-    |> List.map (fun (kind, name, quality) -> ((quality_rank quality, type_rank kind, name), identity kind name quality))
+    |> List.map (fun (kind, name, quality) -> ((not (in_base kind name quality), quality_rank quality, type_rank kind, name),
+                                         (identity kind name quality, in_base kind name quality)))
     |> List.stable_sort (fun (a, _) (b, _) -> compare a b)
     |> List.map snd
   in
+  let base = List.filter snd signals |> List.map fst and signals = List.map fst signals in
   let types =
     capabilities |> member "signals" |> to_list
     |> List.map (fun s -> (s |> member "name" |> to_string, s |> member "type" |> to_string))
@@ -38,6 +44,8 @@ let () =
   Printf.printf "let qualities = [|%s|]\n" (String.concat ";" (List.map (Printf.sprintf "%S") qualities));
   Printf.printf "let identities = [|\n";
   List.iter (Printf.printf "%S;\n") signals;
+  Printf.printf "|]\nlet base_game = [|\n";
+  List.iter (Printf.printf "%S;\n") base;
   Printf.printf "|]\nlet prototype_types = [|\n";
   List.iter (fun (n, t) -> Printf.printf "(%S,%S);\n" n t) types;
   Printf.printf "|]\n"

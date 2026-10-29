@@ -49,7 +49,8 @@ let run input bindings output fas no_optimize emit =
     List.iter (fun (kind, v) -> if List.mem kind emit then save (kind ^ ".json") v)
       [ ("ir", ir); ("project", r.project); ("manifest", r.manifest); ("transitions", r.rows); ("blueprint", r.blueprint) ];
     write_file (Filename.concat output "blueprint.txt") (Emit.exchange_string r.blueprint ^ "\n");
-    Printf.printf "%s: one decider, %d lanes, %d conditions, %d transition rows\n" output r.lanes r.conditions r.row_count;
+    Printf.printf "%s: one decider, %d lanes, %d conditions, %d transition rows, %s\n" output r.lanes r.conditions
+      r.row_count (if Signals.uses_space_age r.blueprint then "needs Space Age" else "base game");
     0
   with
   | Error.Compile_error e -> prerr_string (Report.render !ctx e); 1
