@@ -1,0 +1,18 @@
+// @state count: 0..9 = 0
+// @state held: 0..1 = 0
+
+// @input press = signal-P
+
+// @screen 1x1
+// @number count at=0,0
+
+fn update_held(press bool) bool {
+    return press
+}
+
+fn update_count(count i32, held bool, press bool) i32 {
+    if !press || held { return count }
+
+    if count == 9 { return 0 }
+    return count + 1
+}
