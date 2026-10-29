@@ -1,7 +1,11 @@
 // @state tick: 0..7 = 0
 // @state x: 4..4 = 4
 // @state y: 0..15 = 8
+// @state rise: 0..3 = 0
+
 // @input flap = signal-F
+// @state held: 0..1 = 0
+
 // @screen 24x16
 // @point x,y icon=logistic-robot
 
@@ -14,15 +18,25 @@ fn update_x(x i32) i32 {
 	return x
 }
 
-fn update_y(y i32, tick i32, flap bool) i32 {
-	if tick != 7 { return y }
+fn update_held(flap bool) bool {
+    return flap
+}
 
-	if flap {
-		if y > 0 { return y - 1 }
-		return y
-	}
+fn update_rise(rise i32, tick i32, flap bool, held bool) i32 {
+    if flap && !held { return 3 }
 
-	if y < 15 { return y + 1 }
+    if tick == 7 && rise > 0 { return rise - 1 }
+    return rise
+}
 
-	return y
+fn update_y(y i32, tick i32, rise i32) i32 {
+    if tick != 7 { return y }
+
+    if rise > 0 {
+        if y > 0 { return y - 1 }
+        return y
+    }
+
+    if y < 15 { return y + 1 }
+    return y
 }
