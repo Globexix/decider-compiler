@@ -5,6 +5,8 @@
 // @state rng: 0..6 = 0
 // @state phase: 0..6 = 2
 // @state hit: 0..1 = 0
+// @state score_ones: 0..9 = 0
+// @state score_tens: 0..9 = 0
 
 // @array pipes: Pipe[4]
 // @field pipes.offset: 0..21 = 0,7,14,21
@@ -16,6 +18,9 @@
 
 // @screen 24x16
 // @point x,y icon=logistic-robot
+
+// @number score_tens at=0,15
+// @number score_ones at=1,15
 
 // @rect upper x=(phase+pipes.offset) y=0 width=2 height=pipes.gap_y enabled=pipes.enabled icon=signal-green
 // @rect lower x=(phase+pipes.offset) y=(pipes.gap_y+5) width=2 height=(16-pipes.gap_y-5) enabled=pipes.enabled icon=signal-green
@@ -82,6 +87,30 @@ fn hits_pipe(pipes addr, phase i32, x i32, y i32) bool {
     }
 
     return false
+}
+
+fn passed_pipe(tick i32, phase i32, pipes addr) bool {
+    view items = pipes[arr[4, Pipe]]
+    return tick == 7 && phase == 2 && items[0].enabled
+}
+
+fn update_score_ones(score_ones i32, tick i32, phase i32, pipes addr, hit bool) i32 {
+    if hit { return 0 }
+
+    if !passed_pipe(tick, phase, pipes) { return score_ones }
+    if score_ones == 9 { return 0 }
+    
+    return score_ones + 1
+}
+
+fn update_score_tens(score_tens i32, score_ones i32, tick i32, phase i32, pipes addr, hit bool) i32 {
+    if hit { return 0 }
+
+    if !passed_pipe(tick, phase, pipes) { return score_tens }
+    if score_ones != 9 { return score_tens }
+    if score_tens == 9 { return 0 }
+
+    return score_tens + 1
 }
 
 fn update_hit(pipes addr, phase i32, x i32, y i32, hit bool) bool {
