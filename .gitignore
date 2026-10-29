@@ -1,2 +1,8 @@
 __pycache__/
 output/
+
+_build/
+*.install
+.merlin
+_opam/
+

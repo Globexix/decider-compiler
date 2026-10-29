@@ -1,0 +1,12 @@
+(library
+ (name combinator_compiler)
+ (public_name combinator_compiler)
+ (libraries yojson str decompress.zl)
+ (flags (:standard -w +a-4-9-40-41-42-44-45-70)))
+
+(rule
+ (targets catalog_data.ml)
+ (deps data/capabilities.json data/symbol_catalog.json)
+ (action
+  (with-stdout-to catalog_data.ml
+   (run %{exe:../gen/gen_catalog.exe} data/capabilities.json data/symbol_catalog.json))))

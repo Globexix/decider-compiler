@@ -1,0 +1,12 @@
+(lang dune 3.0)
+(name combinator_compiler)
+
+(generate_opam_files true)
+
+(package
+ (name combinator_compiler)
+ (synopsis "Compile Fas programs into one Factorio 2.1 decider combinator")
+ (depends
+  (ocaml (>= 5.1))
+  (yojson (>= 2.0))
+  (decompress (>= 1.5))))
