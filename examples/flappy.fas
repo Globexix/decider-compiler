@@ -4,6 +4,7 @@
 // @state rise: 0..3 = 0
 // @state rng: 0..6 = 0
 // @state phase: 0..6 = 2
+// @state hit: 0..1 = 0
 
 // @array pipes: Pipe[4]
 // @field pipes.offset: 0..21 = 0,7,14,21
@@ -21,12 +22,14 @@
 
 struct Pipe { offset i32, gap_y i32, enabled bool }
 
-fn update_tick(tick i32) i32 {
+fn update_tick(tick i32, hit bool) i32 {
+    if hit { return 0 }
 	if tick == 7 { return 0 }
 	return tick + 1
 }
 
-fn update_phase(phase i32, tick i32) i32 {
+fn update_phase(phase i32, tick i32, hit bool) i32 {
+    if hit { return 2 }
     if tick != 7 { return phase }
     if phase == 0 { return 6 }
     return phase - 1
@@ -38,9 +41,21 @@ fn update_rng(rng i32, pipes addr, tick i32, phase i32) i32 {
     return rng + 3
 }
 
-fn update_pipes(pipes addr, tick i32, rng i32, phase i32) void {
-    if tick != 7 || phase != 0 { return }
+fn update_pipes(pipes addr, tick i32, rng i32, phase i32, hit bool) void {
     view items = pipes[arr[4, Pipe]]
+
+    if hit {
+        for const i usize in 0..4 {
+            items[i].gap_y = 4
+            items[i].enabled = false
+        }
+
+        items[3].gap_y = 2
+        items[3].enabled = true
+        return
+    }
+
+    if tick != 7 || phase != 0 { return }
     
     for const i usize in 0..3 {
         items[i].gap_y = items[i+1].gap_y
@@ -51,6 +66,29 @@ fn update_pipes(pipes addr, tick i32, rng i32, phase i32) void {
     items[3].enabled = true
 }
 
+fn hits_pipe(pipes addr, phase i32, x i32, y i32) bool {
+    view items = pipes[arr[4, Pipe]]
+
+    for const i usize in 0..4 {
+        if items[i].enabled {
+            pipe_x i32 = phase + items[i].offset
+
+            if x >= pipe_x && x < pipe_x + 2 {
+                if y < items[i].gap_y || y >= items[i].gap_y + 5 {
+                    return true
+                }
+            }
+        }
+    }
+
+    return false
+}
+
+fn update_hit(pipes addr, phase i32, x i32, y i32, hit bool) bool {
+    if hit { return false }
+    return hits_pipe(pipes, phase, x, y)
+}
+
 fn update_x(x i32) i32 {
 	return x
 }
@@ -59,14 +97,16 @@ fn update_held(flap bool) bool {
     return flap
 }
 
-fn update_rise(rise i32, tick i32, flap bool, held bool) i32 {
+fn update_rise(rise i32, tick i32, flap bool, held bool, hit bool) i32 {
+    if hit { return 0 }
     if flap && !held { return 3 }
 
     if tick == 7 && rise > 0 { return rise - 1 }
     return rise
 }
 
-fn update_y(y i32, tick i32, rise i32) i32 {
+fn update_y(y i32, tick i32, rise i32, hit bool) i32 {
+    if hit { return 8 }
     if tick != 7 { return y }
 
     if rise > 0 {
