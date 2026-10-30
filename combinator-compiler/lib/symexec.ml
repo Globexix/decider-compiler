@@ -19,11 +19,15 @@ type t = {
   root_names : (int, string) Hashtbl.t;
   memo : (string * Bitvec.t list * Bdd.t, Bitvec.t option) Hashtbl.t;
   mutable calls : int;
+  mutable hook : (hook -> value option) option;
 }
+
+(* A call as [hook] sees it; [real] runs it. *)
+and hook = { callee : string; actuals : value list; mem : memory; active : Bdd.t; real : unit -> value option }
 
 let create program ~valid =
   { program; valid; cell_ids = Hashtbl.create 64; cells = [||]; root_cells = Hashtbl.create 16;
-    root_names = Hashtbl.create 16; memo = Hashtbl.create 16; calls = 0 }
+    root_names = Hashtbl.create 16; memo = Hashtbl.create 16; calls = 0; hook = None }
 
 let new_root t name =
   let id = Hashtbl.length t.root_names in
@@ -91,7 +95,9 @@ let bits name = function
 let rec run t (f : Ir.func) (args : value list) (mem : memory) ~guard ~stack : value option * memory =
   let name = f.name in
   t.calls <- t.calls + 1;
-  if t.calls > 100_000 then fail "symbolic function execution budget exceeded";
+  if t.calls > 100_000 then
+    fail ~at:(Func name) ~help:[ "helpers called inside unrolled loops run once per call site; call them fewer times or unroll less" ]
+      "the program makes more than 100000 function calls while being analysed";
   if List.mem name stack then fail ~at:(Func name) "recursive calls are unsupported";
   if List.length args <> List.length f.params then fail ~at:(Func name) "wrong argument count";
   let order = Ir.topological_order f in
@@ -212,7 +218,7 @@ let rec run t (f : Ir.func) (args : value list) (mem : memory) ~guard ~stack : v
               let target = match Ir.find_func t.program callee with
                 | Some g -> g | None -> fail ~at:(Func name) "external call %s unsupported" callee in
               let actuals = List.map (fun (_, a) -> value a) call_args in
-              let result =
+              let real () =
                 if List.exists (function Ptr _ -> true | Bits _ -> false) actuals then begin
                   let result, changed = run t target actuals !mem ~guard:active ~stack in
                   mem := IM.filter (fun id _ -> IM.mem id !mem) changed;
@@ -227,6 +233,9 @@ let rec run t (f : Ir.func) (args : value list) (mem : memory) ~guard ~stack : v
                     result
                 end
               in
+              let result = match t.hook with
+                | None -> real ()
+                | Some h -> h { callee; actuals; mem = !mem; active; real } in
               (match dest, result with
                | Some d, Some r -> set d r
                | Some _, None -> fail ~at:(Func name) "call to %s has no result" callee

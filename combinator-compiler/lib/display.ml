@@ -248,9 +248,10 @@ let plan (model : Model.t) ~output ~constants ~factor ~width:w ~height:h (layers
   let domain name = Model.values (Model.domain model name) in
   let prepared = List.mapi (fun index layer ->
       let kind, label = match layer with
-        | Spec.Rect r -> ("rect", r.name) | Point _ -> ("point", "point") | Bar _ -> ("bar", "bar")
-        | Digits _ -> ("digits", "digits") | Number _ -> ("number", "number") | Mask _ -> ("mask", "mask") in
-      ignore label;
+        | Spec.Rect r -> ("rect", if r.name = "" then None else Some r.name) | Point _ -> ("point", None) | Bar b -> ("bar", Some b.state)
+        | Digits d -> ("digits", Some d.state) | Number n -> ("number", Some n.state) | Mask m -> ("mask", Some m.state) in
+      let label = match label with Some l -> Printf.sprintf "`@%s %s`" kind l | None -> Printf.sprintf "the `@%s` layer" kind in
+      Bdd.stage := Printf.sprintf "evaluating %s" label;
       let at = [ "outputs"; string_of_int output; "layers"; string_of_int index ] in
       locate (Path at) (fun () ->
           let shape icon x y width height enabled =
@@ -331,6 +332,7 @@ let plan (model : Model.t) ~output ~constants ~factor ~width:w ~height:h (layers
   let pixels = ref [] in
   for x = 0 to w - 1 do
     for y = 0 to h - 1 do
+      Bdd.stage := Printf.sprintf "working out what lights panel cell %d,%d" x y;
       let records = ref [] in
       let add roots icon = match predicate roots with Some test -> records := { test; icon = Some icon } :: !records | None -> () in
       for index = Array.length prepared_a - 1 downto 0 do

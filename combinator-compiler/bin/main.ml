@@ -24,7 +24,7 @@ let json what text =
 
 let extras = [ "blueprint"; "ir"; "project"; "manifest"; "transitions" ]
 
-let run input bindings output fas no_optimize emit =
+let run input bindings output fas no_optimize min_ups emit =
   let emit = if List.mem "all" emit then extras else emit in
   let ctx = ref { Report.input; source = None; bindings; origins = [] } in
   try
@@ -41,7 +41,7 @@ let run input bindings output fas no_optimize emit =
         ctx := { !ctx with origins };
         config in
     let name = Filename.remove_extension (Filename.basename input) in
-    let r = Compile.compile ~optimize:(not no_optimize) ~name program config in
+    let r = Compile.compile ~optimize:(not no_optimize) ~name ~min_ups program config in
     let rec mkdir_p dir =
       if not (Sys.file_exists dir) then (mkdir_p (Filename.dirname dir); Sys.mkdir dir 0o755) in
     mkdir_p output;
@@ -49,8 +49,10 @@ let run input bindings output fas no_optimize emit =
     List.iter (fun (kind, v) -> if List.mem kind emit then save (kind ^ ".json") v)
       [ ("ir", ir); ("project", r.project); ("manifest", r.manifest); ("transitions", r.rows); ("blueprint", r.blueprint) ];
     write_file (Filename.concat output "blueprint.txt") (Emit.exchange_string r.blueprint ^ "\n");
-    Printf.printf "%s: one decider, %d lanes, %d conditions, %d transition rows, %s\n" output r.lanes r.conditions
-      r.row_count (if Signals.uses_space_age r.blueprint then "needs Space Age" else "base game");
+    Printf.printf "%s: one decider, %d lanes, %d conditions, %d transition rows, ~%.2f ms/tick, %s\n" output r.lanes
+      r.conditions r.row_count r.ms_per_tick (if Signals.uses_space_age r.blueprint then "needs Space Age" else "base game");
+    List.iter (fun (l : Model.latch) ->
+        Printf.printf "  latched `%s` while %s is %s\n" l.callee l.phase (String.concat ", " (List.map string_of_int l.uses))) r.latches;
     0
   with
   | Error.Compile_error e -> prerr_string (Report.render !ctx e); 1
@@ -65,6 +67,7 @@ options:
   --bindings FILE  JSON bindings for Fas IR input (default: the source's declarations)
   --fas PATH       Fas compiler (default fas)
   --no-optimize    skip condition minimization (faster compiles)
+  --min-ups N      fail if the estimated speed is below N UPS (default 20; 0 disables)
   --emit KIND      also write DIR/KIND.json (repeatable)
                    KIND is blueprint, ir, project, manifest, transitions or all
   -h, --help       show this help
@@ -73,7 +76,7 @@ options:
 let () =
   let die fmt = Printf.ksprintf (fun m -> Printf.eprintf "combinator-compiler: error: %s\n(see combinator-compiler --help)\n" m; exit 2) fmt in
   let input = ref None and output = ref None and bindings = ref None and fas = ref "fas"
-  and no_optimize = ref false and emit = ref [] in
+  and no_optimize = ref false and min_ups = ref 20. and emit = ref [] in
   let rec parse = function
     | [] -> ()
     | ("-h" | "--help") :: _ -> print_string usage; exit 0
@@ -81,17 +84,21 @@ let () =
     | flag :: rest when String.length flag > 2 && String.starts_with ~prefix:"--" flag && String.contains flag '=' ->
       let i = String.index flag '=' in
       parse (String.sub flag 0 i :: String.sub flag (i + 1) (String.length flag - i - 1) :: rest)
-    | ("-o" | "--bindings" | "--fas" | "--emit") as flag :: value :: rest ->
+    | ("-o" | "--bindings" | "--fas" | "--emit" | "--min-ups") as flag :: value :: rest ->
       (match flag with
        | "-o" -> output := Some value
        | "--bindings" -> bindings := Some value
        | "--fas" -> fas := value
+       | "--min-ups" ->
+         (match float_of_string_opt value with
+          | Some v when v >= 0. -> min_ups := v
+          | _ -> die "--min-ups needs a number, got `%s`" value)
        | _ ->
          if not (List.mem value ("all" :: extras)) then
            die "unknown --emit kind `%s`; expected %s or all" value (String.concat ", " extras);
          emit := value :: !emit);
       parse rest
-    | ("-o" | "--bindings" | "--fas" | "--emit") as flag :: [] -> die "%s needs a value" flag
+    | ("-o" | "--bindings" | "--fas" | "--emit" | "--min-ups") as flag :: [] -> die "%s needs a value" flag
     | arg :: _ when String.length arg > 1 && arg.[0] = '-' -> die "unknown option %s" arg
     | arg :: rest ->
       if !input <> None then die "more than one input file";
@@ -100,4 +107,4 @@ let () =
   match !input, !output with
   | None, _ -> print_string usage; exit 2
   | Some _, None -> die "missing -o DIR"
-  | Some input, Some output -> exit (run input !bindings output !fas !no_optimize (List.rev !emit))
+  | Some input, Some output -> exit (run input !bindings output !fas !no_optimize !min_ups (List.rev !emit))

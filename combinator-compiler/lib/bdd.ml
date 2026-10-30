@@ -1,16 +1,29 @@
+open Bigarray
+
 type t = int
+
+(* Tables keyed by nodes or variables; the generic Hashtbl (and Int.hash) hash through a C call. *)
+module Tbl = Hashtbl.Make (struct type t = int let equal = Int.equal let hash x = x land max_int end)
 
 let zero = 0
 let one = 1
 let terminal_var = max_int
 
-let vars = ref [||]
-let lows = ref [||]
-let highs = ref [||]
-let count = ref 0
-let limit = ref 20_000_000
+(* Nodes and the unique table live off-heap as int32: 12 bytes per node plus
+   4 per table slot, and the GC never scans them. *)
+type store = (int32, int32_elt, c_layout) Array1.t
 
-let table = ref [||]
+let make_store n fill = let a = Array1.create int32 c_layout n in Array1.fill a (Int32.of_int fill); a
+
+let nodes : store ref = ref (make_store 0 0)
+let count = ref 0
+(* Nodes freed by [collect] form a list threaded through their low fields. *)
+let free_head = ref 0
+let free_count = ref 0
+let limit = ref 20_000_000
+let stage = ref "building the model"
+
+let table : store ref = ref (make_store 0 0)
 let table_mask = ref 0
 
 let cache_bits = 20
@@ -19,22 +32,24 @@ let ite_cache = Array.make (4 * cache_size) (-1)
 let not_cache = Array.make (2 * cache_size) (-1)
 
 let reset () =
-  vars := Array.make 1024 terminal_var;
-  lows := Array.make 1024 0;
-  highs := Array.make 1024 0;
-  !lows.(1) <- 1; !highs.(1) <- 1;
+  nodes := make_store (3 * 1024) 0;
+  !nodes.{1} <- 1l; !nodes.{2} <- 1l;
   count := 2;
-  table := Array.make 2048 0;
+  free_head := 0;
+  free_count := 0;
+  table := make_store 2048 0;
   table_mask := 2047;
+  stage := "building the model";
   Array.fill ite_cache 0 (Array.length ite_cache) (-1);
   Array.fill not_cache 0 (Array.length not_cache) (-1)
 
 let () = reset ()
 
-let size () = !count
-let var n = Array.unsafe_get !vars n
-let low n = Array.unsafe_get !lows n
-let high n = Array.unsafe_get !highs n
+let size () = !count - !free_count
+let[@inline] field n k = Int32.to_int (Array1.unsafe_get !nodes (3 * n + k))
+let var n = if n < 2 then terminal_var else field n 0
+let low n = field n 1
+let high n = field n 2
 let is_const n = n < 2
 
 let[@inline] hash3 a b c =
@@ -42,23 +57,32 @@ let[@inline] hash3 a b c =
   h lxor (h lsr 29)
 
 let grow_nodes () =
-  let n = Array.length !vars in
-  let extend a fill = let b = Array.make (2 * n) fill in Array.blit a 0 b 0 n; b in
-  vars := extend !vars terminal_var;
-  lows := extend !lows 0;
-  highs := extend !highs 0
+  let n = Array1.dim !nodes / 3 in
+  let b = make_store (3 * min (2 * n) (!limit + 1)) 0 in
+  Array1.blit !nodes (Array1.sub b 0 (3 * n));
+  nodes := b
 
-let rehash () =
-  let size = 2 * Array.length !table in
-  let t = Array.make size 0 in
+let rehash ?(grow = true) () =
+  let size = if grow then 2 * Array1.dim !table else Array1.dim !table in
+  let t = make_store size 0 in
   let mask = size - 1 in
   for n = 2 to !count - 1 do
-    let i = ref (hash3 (var n) (low n) (high n) land mask) in
-    while t.(!i) <> 0 do i := (!i + 1) land mask done;
-    t.(!i) <- n
+    if var n >= 0 then begin
+      let i = ref (hash3 (var n) (low n) (high n) land mask) in
+      while Array1.unsafe_get t !i <> 0l do i := (!i + 1) land mask done;
+      t.{!i} <- Int32.of_int n
+    end
   done;
   table := t;
   table_mask := mask
+
+let budget_exceeded () =
+  Error.fail
+    ~notes:[ (None, Printf.sprintf "the compiler stopped while %s" !stage) ]
+    ~help:[ "narrow state ranges, use fewer array elements or smaller arrays, or split long chains of \
+             conditions into smaller helper functions";
+            "values that interact (e.g. comparing every array element against a moving position) multiply in size" ]
+    "the program is too large to analyse: it needs more than %d symbolic nodes" !limit
 
 let mk v l h =
   if l = h then l
@@ -67,23 +91,57 @@ let mk v l h =
     let i = ref (hash3 v l h land mask) in
     let found = ref (-1) in
     while !found < 0 do
-      let n = Array.unsafe_get t !i in
+      let n = Int32.to_int (Array1.unsafe_get t !i) in
       if n = 0 then found := 0
       else if var n = v && low n = l && high n = h then found := n
       else i := (!i + 1) land mask
     done;
     if !found > 0 then !found
     else begin
-      if !count >= !limit then Error.fail "symbolic BDD node budget exceeded";
-      if !count >= Array.length !vars then grow_nodes ();
-      let n = !count in
-      incr count;
-      !vars.(n) <- v; !lows.(n) <- l; !highs.(n) <- h;
-      t.(!i) <- n;
-      if 2 * !count > Array.length t then rehash ();
+      let n =
+        if !free_head <> 0 then begin
+          let n = !free_head in
+          free_head := low n;
+          decr free_count;
+          n
+        end else begin
+          if !count >= !limit then budget_exceeded ();
+          if 3 * (!count + 1) > Array1.dim !nodes then grow_nodes ();
+          let n = !count in
+          incr count;
+          n
+        end in
+      let a = !nodes in
+      a.{3 * n} <- Int32.of_int v; a.{3 * n + 1} <- Int32.of_int l; a.{3 * n + 2} <- Int32.of_int h;
+      t.{!i} <- Int32.of_int n;
+      if 4 * !count > 3 * Array1.dim t then rehash ();
       n
     end
   end
+
+(* Frees every node not reachable from [roots]. Node numbers of live nodes are unchanged, so any
+   BDD the caller still uses must be among the roots or below one. *)
+let collect roots =
+  let marks = Bytes.make !count '\000' in
+  let rec mark n =
+    if n >= 2 && Bytes.unsafe_get marks n = '\000' then begin
+      Bytes.unsafe_set marks n '\001';
+      mark (low n); mark (high n)
+    end in
+  List.iter mark roots;
+  let a = !nodes in
+  free_head := 0;
+  free_count := 0;
+  for n = !count - 1 downto 2 do
+    if Bytes.unsafe_get marks n = '\000' then begin
+      a.{3 * n} <- -1l; a.{3 * n + 1} <- Int32.of_int !free_head; a.{3 * n + 2} <- 0l;
+      free_head := n;
+      incr free_count
+    end
+  done;
+  rehash ~grow:false ();
+  Array.fill ite_cache 0 (Array.length ite_cache) (-1);
+  Array.fill not_cache 0 (Array.length not_cache) (-1)
 
 let ithvar v = mk v 0 1
 
@@ -140,11 +198,10 @@ let disj l = List.fold_left or_ 0 l
 
 let implies a b = and_ a (not_ b) = 0
 
-let restrict_with ~value ~last f =
-  let memo = Hashtbl.create 64 in
+let restrict_with ?(memo = Tbl.create 64) ~value ~last f =
   let rec go f =
     if f < 2 || var f > last then f
-    else match Hashtbl.find_opt memo f with
+    else match Tbl.find_opt memo f with
       | Some r -> r
       | None ->
         let r = match value (var f) with
@@ -152,17 +209,17 @@ let restrict_with ~value ~last f =
           | 1 -> go (high f)
           | _ -> mk (var f) (go (low f)) (go (high f))
         in
-        Hashtbl.add memo f r; r
+        Tbl.add memo f r; r
   in
   go f
 
-let restrict f assignment =
-  match assignment with
-  | [] -> f
-  | _ ->
-    let table = Hashtbl.create 16 in
-    let last = List.fold_left (fun m (v, b) -> Hashtbl.replace table v b; max m v) (-1) assignment in
-    restrict_with ~value:(fun v -> match Hashtbl.find_opt table v with Some b -> b | None -> -1) ~last f
+(* [restrictor assignment] restricts any node, sharing one memo across calls. *)
+let restrictor assignment =
+  let table = Tbl.create 16 and memo = Tbl.create 64 in
+  let last = List.fold_left (fun m (v, b) -> Tbl.replace table v b; max m v) (-1) assignment in
+  restrict_with ~memo ~value:(fun v -> match Tbl.find_opt table v with Some b -> b | None -> -1) ~last
+
+let restrict f assignment = match assignment with [] -> f | _ -> restrictor assignment f
 
 let eval f value =
   let rec go f = if f < 2 then f = 1 else go (if value (var f) then high f else low f) in
@@ -177,37 +234,37 @@ let any_sat f =
   go f []
 
 let support f =
-  let seen = Hashtbl.create 64 and vs = Hashtbl.create 16 in
+  let seen = Tbl.create 64 and vs = Tbl.create 16 in
   let rec go f =
-    if f >= 2 && not (Hashtbl.mem seen f) then begin
-      Hashtbl.add seen f ();
-      Hashtbl.replace vs (var f) ();
+    if f >= 2 && not (Tbl.mem seen f) then begin
+      Tbl.add seen f ();
+      Tbl.replace vs (var f) ();
       go (low f); go (high f)
     end in
   go f;
-  List.sort compare (Hashtbl.fold (fun v () acc -> v :: acc) vs [])
+  List.sort compare (Tbl.fold (fun v () acc -> v :: acc) vs [])
 
 let exists vars f =
   match vars with
   | [] -> f
   | _ ->
-    let set = Hashtbl.create 16 in
-    List.iter (fun v -> Hashtbl.replace set v ()) vars;
+    let set = Tbl.create 16 in
+    List.iter (fun v -> Tbl.replace set v ()) vars;
     let last = List.fold_left max (-1) vars in
-    let memo = Hashtbl.create 64 in
+    let memo = Tbl.create 64 in
     let rec go f =
       if f < 2 || var f > last then f
-      else match Hashtbl.find_opt memo f with
+      else match Tbl.find_opt memo f with
         | Some r -> r
         | None ->
           let l = go (low f) and h = go (high f) in
-          let r = if Hashtbl.mem set (var f) then or_ l h else mk (var f) l h in
-          Hashtbl.add memo f r; r
+          let r = if Tbl.mem set (var f) then or_ l h else mk (var f) l h in
+          Tbl.add memo f r; r
     in
     go f
 
 let dag_size roots =
-  let seen = Hashtbl.create 64 in
-  let rec go f = if f >= 2 && not (Hashtbl.mem seen f) then (Hashtbl.add seen f (); go (low f); go (high f)) in
+  let seen = Tbl.create 64 in
+  let rec go f = if f >= 2 && not (Tbl.mem seen f) then (Tbl.add seen f (); go (low f); go (high f)) in
   List.iter go roots;
-  Hashtbl.length seen
+  Tbl.length seen

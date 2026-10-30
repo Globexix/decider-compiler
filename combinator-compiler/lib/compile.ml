@@ -8,7 +8,9 @@ type result = {
   blueprint : Yojson.Safe.t;
   lanes : int;
   conditions : int;
+  ms_per_tick : float;
   row_count : int;
+  latches : Model.latch list;
 }
 
 let big_product factors =
@@ -36,6 +38,7 @@ let reachable_box (model : Model.t) ~care ~constants =
     Bdd.conj (care :: List.map (fun (s : Spec.state) ->
         Cover.domain_bdd (Model.domain model s.name) (Hashtbl.find sets s.name)) states) in
   let bits = Model.constant_assignment model constants in
+  Bdd.stage := "finding the reachable range of every state";
   let rec grow () =
     let b = box () in
     let changed = ref false in
@@ -65,6 +68,7 @@ let display_cells (spec : Spec.t) model ~optimize ~constants outputs =
       match output with
       | Canvas { width; height; layers } ->
         if List.exists (function Spec.Rect _ -> true | _ -> false) layers && spec.symbolic then begin
+          Bdd.stage := "working out which panel cells each `@rect` can light";
           let flags, pixels = Display.plan model ~output:index ~constants ~factor:optimize ~width ~height layers in
           derived := !derived @ flags;
           List.iter (place ~index) pixels
@@ -103,7 +107,7 @@ let display_parameters l (derived : Display.derived list) records =
       | Always -> [ with_icon (condition l.start ">=" 0) r.icon ]
       | Visible key -> List.map (fun (s, v) -> with_icon (condition s "=" v) r.icon) (visible l (flag_for key))) records
 
-let compile ?(optimize = true) ?(name = "program") (program : Ir.program) (config : Yojson.Safe.t) =
+let compile ?(optimize = true) ?(name = "program") ?(min_ups = 20.) (program : Ir.program) (config : Yojson.Safe.t) =
   if program.has_globals then
     fail ~help:[ "pass state to update functions as parameters, bound by `@state` declarations" ] "global variables are not supported";
   let spec = Spec.of_json config in
@@ -112,7 +116,9 @@ let compile ?(optimize = true) ?(name = "program") (program : Ir.program) (confi
   let cases = big_product sizes in
   if (not symbolic) && (not (fits_int cases) || int_of_string cases > 4096) then
     fail ~at:(Path [ "backend" ]) ~help:[ "use `\"backend\": \"symbolic\"`" ] "the transition table would have %s rows; the table backend allows 4096" cases;
-  let model = Model.create spec program in
+  let latch = symbolic && optimize && Sys.getenv_opt "FAS_FACTORIO_NO_LATCH" <> Some "1" in
+  let model = Model.create ~latch spec program in
+  let spec = model.spec in
   let constants = if symbolic && optimize && spec.arrays <> [] then Model.array_constants model else [] in
   let bits = Model.constant_assignment model constants in
   let fix b = if bits = [] then b else Bdd.restrict b bits in
@@ -148,7 +154,19 @@ let compile ?(optimize = true) ?(name = "program") (program : Ir.program) (confi
           (d.next, Some d.current) in
       let flip b = if f.inverted then Bdd.not_ b else b in
       { flag = f; next = flip next; current = Option.map flip current }) l.flags in
-  let plans = List.map (fun t -> (t.flag, plan_target ~optimize l spec model ~care t)) targets in
+  (* Planning leaves most of its nodes dead; collect them whenever the live count has doubled. *)
+  let roots () =
+    let vectors table = Hashtbl.fold (fun _ v acc -> Array.to_list v @ acc) table [] in
+    (model.valid :: care :: vectors model.values) @ vectors model.next
+    @ List.concat_map (fun t -> t.next :: Option.to_list t.current) targets
+    @ List.concat_map (fun (d : Display.derived) -> [ d.current; d.next ]) derived in
+  let kept = ref (Bdd.size ()) in
+  let plans = List.map (fun t ->
+      if Bdd.size () > 2 * !kept + 1_000_000 then (Bdd.collect (roots ()); kept := Bdd.size ());
+      Bdd.stage := (match t.flag.key with
+          | Display.State (s, v) -> Printf.sprintf "building the conditions for `%s` = %d" s v
+          | Derived n -> Printf.sprintf "building the conditions for display cell `%s`" n);
+      (t.flag, plan_target ~optimize l spec model ~care t)) targets in
   List.iter (fun ((f : flag), (p : plan)) -> f.pass_on <- p.pass_on) plans;
   if Sys.getenv_opt "FAS_FACTORIO_CHECK" = Some "1" then
     List.iter2 (fun t (_, p) ->
@@ -162,14 +180,28 @@ let compile ?(optimize = true) ?(name = "program") (program : Ir.program) (confi
     if not (Hashtbl.mem seen group) then begin
       Hashtbl.replace seen group ();
       count := !count + List.length group;
-      if !count > limit then fail "the decider would need more than %d conditions" limit;
+      if !count > limit then
+        fail ~notes:[ (None, Printf.sprintf "the compiler stopped while %s" !Bdd.stage) ]
+          ~help:[ "narrow state ranges, or make updates depend on fewer states" ]
+          "the decider would need more than %d conditions" limit;
       groups := group :: !groups
     end in
   List.iter emit (fixed_groups l);
-  List.iter (fun (f, p) -> List.iter emit (compute_groups l spec f p)) plans;
+  List.iter (fun ((f : flag), p) ->
+      Bdd.stage := (match f.key with
+          | Display.State (s, v) -> Printf.sprintf "emitting the conditions for `%s` = %d" s v
+          | Derived n -> Printf.sprintf "emitting the conditions for display cell `%s`" n);
+      List.iter emit (compute_groups l spec f p)) plans;
   let conditions = Emit.flatten (List.rev !groups) in
   let seeds = List.map (fun n -> { Emit.signal = n; copy_red = false; value = l.base n }) (List.tl (Array.to_list l.names)) in
   let outs delta = { Emit.signal = "each"; copy_red = true; value = 1 } :: { signal = "each"; copy_red = false; value = delta } :: seeds in
+  let ms_per_tick = Cost.estimate l spec conditions (outs 1) (outs (-1)) in
+  if Cost.ups ms_per_tick < min_ups then
+    fail ~notes:[ (None, Printf.sprintf "%d lanes and %d conditions; the estimate is %.1f ms of circuit work per tick, %.0f UPS"
+                     l.lanes (List.length conditions) ms_per_tick (Cost.ups ms_per_tick)) ]
+      ~help:[ "narrow state ranges or remove states: every tick each condition is checked against every lane";
+              "pass `--min-ups 0` to build it anyway" ]
+      "the game would run below %g UPS" min_ups;
   let p = Emit.project () in
   Emit.add_node p "machine" "decider"
     (`Assoc [ ("conditions", `List (List.map Emit.condition_json conditions));
@@ -251,5 +283,5 @@ let compile ?(optimize = true) ?(name = "program") (program : Ir.program) (confi
                        Option.map (fun (s, v) -> (d.name, `List [ `String s; `Int v ])) d.alias) derived)) ])
             @ (match Spec.raw_field spec "arrays" with Some a when spec.arrays <> [] -> [ ("arrays", a) ] | _ -> [])
             @ if constants = [] then [] else [ ("constant_array_fields", `Assoc (List.map (fun (n, v) -> (n, `Int v)) constants)) ]) in
-  { project = Emit.project_json p; manifest; rows = `List rows; blueprint; lanes = l.lanes; conditions = condition_count;
-    row_count = List.length rows }
+  { project = Emit.project_json p; manifest; rows = `List rows; blueprint; lanes = l.lanes; conditions = condition_count; ms_per_tick;
+    row_count = List.length rows; latches = model.latches }

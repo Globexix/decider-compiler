@@ -108,7 +108,9 @@ let groups l spec ~phase ~prefix cubes =
   List.concat_map (fun cube ->
       let alternatives = List.fold_left (fun acc o ->
           let alts = o.build phase in
-          if List.length acc * List.length alts > 100_000 then fail "symbolic predicate expansion budget exceeded";
+          if List.length acc * List.length alts > 100_000 then fail ~notes:[ (None, Printf.sprintf "the compiler stopped while %s" !Bdd.stage) ]
+              ~help:[ "narrow the ranges of the states this value depends on" ]
+              "a single condition would expand into more than 100000 alternatives";
           List.concat_map (fun a -> List.map (fun b -> a @ b) alts) acc) [ [] ] (spell l spec cube) in
       List.map (fun alt -> named_first (prefix @ alt)) alternatives) cubes
 
