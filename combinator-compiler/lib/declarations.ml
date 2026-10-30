@@ -126,7 +126,10 @@ let syntaxes = [
 let declaration_re = Str.regexp "^\\([ \t]*//[ \t]*\\)@\\([A-Za-z_]+\\)"
 
 let declarations source =
-  List.mapi (fun i line -> (i + 1, line)) (String.split_on_char '\n' source)
+  let strip_cr line =
+    let n = String.length line in
+    if n > 0 && line.[n - 1] = '\r' then String.sub line 0 (n - 1) else line in
+  List.mapi (fun i line -> (i + 1, strip_cr line)) (String.split_on_char '\n' source)
   |> List.filter_map (fun (number, line) ->
       if not (Str.string_match declaration_re line 0) then None
       else

@@ -10,8 +10,7 @@ exception Fas_failed of string
 
 let fas_ir fas path =
   let out = Filename.temp_file "fas" ".json" and err = Filename.temp_file "fas" ".err" in
-  let command = Printf.sprintf "%s --emit-ir-json %s > %s 2> %s" (Filename.quote fas) (Filename.quote path)
-      (Filename.quote out) (Filename.quote err) in
+  let command = Filename.quote_command fas ~stdout:out ~stderr:err [ "--emit-ir-json"; path ] in
   let status = Sys.command command in
   let stdout = read_file out and stderr = String.trim (read_file err) in
   Sys.remove out;
