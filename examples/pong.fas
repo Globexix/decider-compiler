@@ -1,5 +1,5 @@
 // @state tick: 0..7 = 1
-// @state x: 2..21 = 12
+// @state x: 0..23 = 12
 // @state y: 0..15 = 8
 // @state left: 0..13 = 6
 // @state right: 0..13 = 6
@@ -59,37 +59,41 @@ fn bounce_y(y i32, down bool) i32 {
     return y - 1
 }
 
+fn at_edge(x i32) bool {
+    return x == 0 || x == 23
+}
+
 fn update_x(x i32, vx bool, tick i32, miss bool) i32 {
     if tick != 0 { return x }
-    if miss { return 12 }
+    if at_edge(x) { return 12 }
 
-    if x == 2 && !vx { return 3 }
-    if x == 21 && vx { return 20 }
+    if x == 2 && !vx && !miss { return 3 }
+    if x == 21 && vx && !miss { return 20 }
 
     if vx { return x + 1 }
     return x - 1
 }
 
-fn update_y(y i32, vy bool, tick i32, miss bool) i32 {
+fn update_y(y i32, vy bool, tick i32, x i32) i32 {
     if tick != 0 { return y }
-    if miss { return 8 }
+    if at_edge(x) { return 8 }
 
     return bounce_y(y, vy)
 }
 
 fn update_vx(x i32, vx bool, tick i32, miss bool, serve i32) bool {
     if tick != 0 { return vx }
-    if miss { return serve < 2 }
+    if at_edge(x) { return serve < 2 }
 
-    if x == 2 && !vx { return true }
-    if x == 21 && vx { return false }
+    if x == 2 && !vx && !miss { return true }
+    if x == 21 && vx && !miss { return false }
 
     return vx
 }
 
-fn update_vy(y i32, vy bool, tick i32, miss bool, serve i32) bool {
+fn update_vy(y i32, vy bool, tick i32, x i32, serve i32) bool {
     if tick != 0 { return vy }
-    if miss { return (serve & 1) == 0 }
+    if at_edge(x) { return (serve & 1) == 0 }
 
     if y == 0 { return true }
     if y == 15 { return false }
@@ -97,34 +101,34 @@ fn update_vy(y i32, vy bool, tick i32, miss bool, serve i32) bool {
     return vy
 }
 
-fn update_serve(tick i32, miss bool, serve i32) i32 {
-    if tick != 0 || !miss { return serve }
+fn update_serve(tick i32, x i32, serve i32) i32 {
+    if tick != 0 || !at_edge(x) { return serve }
 
     if serve == 3 { return 0 }
     return serve + 1
 }
 
-fn update_score_left(score_left i32, score_right i32, x i32, tick i32, miss bool) i32 {
-    if tick != 0 || !miss { return score_left }
+fn update_score_left(score_left i32, score_right i32, x i32, tick i32) i32 {
+    if tick != 0 || !at_edge(x) { return score_left }
 
-    if x == 21 {
+    if x == 23 {
         if score_left == 9 { return 0 }
         return score_left + 1
     }
 
-    if x == 2 && score_right == 9 { return 0 }
+    if x == 0 && score_right == 9 { return 0 }
     return score_left
 }
 
-fn update_score_right(score_right i32, score_left i32, x i32, tick i32, miss bool) i32 {
-    if tick != 0 || !miss { return score_right }
+fn update_score_right(score_right i32, score_left i32, x i32, tick i32) i32 {
+    if tick != 0 || !at_edge(x) { return score_right }
 
-    if x == 2 {
+    if x == 0 {
         if score_right == 9 { return 0 }
         return score_right + 1
     }
 
-    if x == 21 && score_left == 9 { return 0 }
+    if x == 23 && score_left == 9 { return 0 }
     return score_right
 }
 
