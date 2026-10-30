@@ -43,9 +43,13 @@ combinator-compiler examples/counter.fas -o out
 
 This writes `out/blueprint.txt`. It also prints the condition count and the estimated cost per tick, and stops if the game would run below 20 UPS. See `--help` for the other options.
 
-## Building
+## Install
 
-You need OCaml 5.1+, dune, and the [Fas](https://github.com/fas-language/fas/releases/tag/v0.6.3) compiler on your `PATH` (or pass it with `--fas PATH`).
+You need the [Fas](https://github.com/fas-language/fas/releases/tag/v0.6.3) compiler on your `PATH` (or pass it with `--fas PATH`).
+
+Prebuilt binaries for Linux and Windows are on the [releases page](https://github.com/Globexix/decider-compiler/releases).
+
+To build it yourself, you also need OCaml 5.1+ and dune:
 
 ```sh
 cd combinator-compiler
